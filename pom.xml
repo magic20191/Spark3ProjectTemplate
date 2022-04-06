@@ -29,6 +29,7 @@
         <twitter.util.version>21.1.0</twitter.util.version>
         <hudi.version>0.10.1</hudi.version>
         <mysql.version>6.0.5</mysql.version>
+        <druid.version>1.1.10</druid.version>
     </properties>
 
     <dependencyManagement>
@@ -303,6 +304,12 @@
                 <artifactId>libthrift</artifactId>
                 <version>0.9.3</version>
             </dependency>
+            <dependency>
+                <groupId>com.alibaba</groupId>
+                <artifactId>druid</artifactId>
+                <version>${druid.version}</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
     <build>

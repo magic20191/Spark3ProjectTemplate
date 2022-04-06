@@ -1,0 +1,227 @@
+package com.kin.main
+
+import com.kin.computationRule.offlineRule.calculateQ1ToQ4
+import com.kin.sql.mysql.offlineSql
+import com.kin.utils.DateUtils.now
+import com.kin.utils.DruidUtils
+import org.apache.log4j.{Level, LogManager, Logger}
+import org.apache.spark.internal.Logging
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types.{StructType, _}
+
+import scala.collection.immutable.HashMap
+
+object Streaming extends Logging {
+
+  def main(args: Array[String]) {
+    //set log4j programmatically
+    LogManager.getLogger("org.apache.spark").setLevel(Level.WARN)
+    LogManager.getLogger("org.apache.kafka").setLevel(Level.WARN)
+    LogManager.getLogger("akka").setLevel(Level.ERROR)
+
+    System.load("D:\\hadoop-3.0.0\\bin\\hadoop.dll"); //本地测试
+
+    val schema: StructType = new StructType()
+      .add("source", IntegerType)  //报文的接收来源：1、系统对接(暴露API供第三方调用)；2、IOT解析程序推送；3、定时调度拉取第三方； ★必填
+      .add("msgType", IntegerType) //消息数据类型: 1、测量数据，2、设备状态数据               ★必填
+      .add("collectInterval", IntegerType) //采集间隔（分钟）         ★必填
+      .add("receiveInterval", IntegerType) // 发送间隔（分钟）
+      .add("dataType", StringType) //设备类型:水表datatype=METER_INFO、消防栓dataType=FIRE_HYDRANT、阀门dataType=REMOTE_VALVE、水
+      .add("sn", StringType) //设备编码
+      .add("dsn", StringType) // 设备编码
+      .add("receiveTime", LongType) //上位系统接收到设备数据的时间
+      .add("collectTime", LongType)   //设备的每个采集周期时间戳  ★必
+      .add("instantFlowRate", FloatType) //瞬时流量 浮点数
+      .add("instantFlowRateInterpolatValue", FloatType)  //插补
+      .add("positiveCumulative", FloatType) //正累计插补值
+      .add("positiveCumulativeInterpolatValue", FloatType)
+      .add("negativeCumulative", FloatType)  //反累计
+      .add("negativeCumulativeInterpolatValue", FloatType)
+      .add("netCumulative", FloatType) //净累计
+      .add("netCumulativeInterpolatValue", FloatType)
+      .add("phValue", FloatType) //PH值
+      .add("pressure", FloatType) //压力
+      .add("residualChlorine", FloatType)  //余氯
+      .add("turbidity", FloatType) //浊度
+      .add("warn", StringType)  //本次采集周期出现的告警类型,
+      .add("isDelayed", IntegerType) // 是否迟到数据 0:正常 1:超过1天 2:班次内迟到(?)
+      .add("isInter", IntegerType)  // 是否插补
+
+    //initialize spark session
+    val spark = SparkSession
+      .builder()
+      .master("local[4]")
+      .appName("kafka-structured")
+      .config("spark.yarn.queue", "root.users.hdfs")
+      .config("spark.default.parallelism", 3)
+      .config("spark.sql.shuffle.partitions", 3)
+      .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+      .config("spark.kryoserializer.buffer.max", "512m")
+      .config("spark.driver.bindAddress", "localhost")
+      .getOrCreate()
+
+    import spark.implicits._
+    import org.apache.spark.sql.functions._
+
+    //读取mysql配置表
+    var options2:Map[String,String] = HashMap()
+    options2 += ("url"->"jdbc:mysql://10.0.0.201:3306/rtm_data_zhuhai")
+    options2 += ("driver"->"com.mysql.jdbc.Driver")
+    options2 += ("user"->"root")
+    options2 += ("password"->"123456")
+    options2 += ("useUnicode"-> "true")
+    options2 += ("useSSL"->"false")
+    options2 += ("characterEncoding"-> "UTF8")
+    options2 += ("dbtable"-> offlineSql.radioConfigTb)
+
+    val mysqlQuer = spark.sqlContext.read.format("jdbc").options(options2).load
+    mysqlQuer.createOrReplaceTempView("radioConfigTb")  //计量效率_计量规则表
+
+    //data stream from kafka
+    val ds1 = spark
+      .readStream
+      .format("kafka")
+      .option("kafka.bootstrap.servers", "10.0.20.32:9092")
+      .option("subscribe", "kintest")
+      .option("startingOffsets", "earliest")
+      .load()
+
+    //start the streaming query logic
+     val value = ds1
+       .selectExpr("CAST(value AS STRING) as data","CAST(timestamp AS TIMESTAMP)")
+       .as[(String,String)]
+       .select(from_json('data, schema) as "data",col("TIMESTAMP"))
+       //       .filter("data.isDelayed != 0 and data.collectTime <> 本月") //生产
+       .filter("data.isDelayed = 0 ") //测试
+       .select(col("data.dsn") as "dsn",col("data.collectTime")as "collectTime"
+         ,col("data.instantFlowRate") as "instantFlowRate" ,col("data.instantFlowRateInterpolatValue"),col("TIMESTAMP"))
+       .withWatermark("TIMESTAMP", "15 seconds")
+       .createTempView("kafkaS")
+
+    val out =spark.sql(
+      """
+        |select
+        |a.dsn,
+        |a.collectTime,
+        |a.instantFlowRateList,
+        |a.instantFlowRateInterpolatList,
+        |b.q1,
+        |b.q2,
+        |b.q3,
+        |b.q4
+        |from
+        |(select
+        |dsn,
+        |from_unixtime(collectTime, 'yyyy-MM') as collectTime,
+        |window(TIMESTAMP, "5 minute"),
+        |concat_ws(',',collect_list(instantFlowRate)) as instantFlowRateList,
+        |concat_ws(',',collect_list(instantFlowRateInterpolatValue)) as instantFlowRateInterpolatList
+        |from
+        | kafkaS
+        |group by window(TIMESTAMP, "5 minute"),from_unixtime(collectTime, 'yyyy-MM') ,dsn)a
+        |join radioConfigTb b on a.dsn=b.point_id
+        |""".stripMargin)
+      .mapPartitions(partition=>{
+      val conn = DruidUtils.getConnection //从连接池中获取一个连接
+      //传入 id取出结果表的信息 与迟到表数据进行关联计算后  写回结果表
+      var res = List[remoteMeasureRatio]()
+      partition.foreach(
+        row=>{
+          //拿到迟到表每行的dsn与数据时间（collectTime取月） 与 结果表关联
+          val dsn = row.getAs[String](0)   //dsn
+          val collectTime = row.getAs[String](1)  //collectTime
+          val instantFlowRateList = row.getAs[String](2)   //instantFlowRateList
+          val instantFlowRateInterpolatList = row.getAs[String](3)  //instantFlowRateInterpolatList
+          val q1 = row.getAs[Double](4)  //q1
+          val q2 = row.getAs[Double](5)  //q2
+          val q3 = row.getAs[Double](6)  //q3
+          val q4 = row.getAs[Double](7)  //q4
+
+          //设计结果表 ID = dsn+collectTime_MONTH
+          var q1cnt=0
+          var q2cnt=0
+          var q3cnt=0
+          var q4cnt=0
+          var qcnt=0
+          //mysql结果表取数
+          val ps = conn.prepareStatement("select id,q1cnt,q2cnt,q3cnt,q4cnt,qcnt from where id = ?")
+          ps.setString(0,dsn+collectTime)
+          val rs = ps.executeQuery()
+          while(rs.next()){  //通过next来索引：判断是否有下一个记录
+            q1cnt = rs.getInt(2)
+            q2cnt = rs.getInt(3)
+            q3cnt = rs.getInt(4)
+            q4cnt = rs.getInt(5)
+            qcnt = rs.getInt(6)
+          }
+          rs.close();
+          ps.close();
+          //mysql结果表取数结束
+
+          //这里调用 计量效率迟到数据处理规则
+          // 计算Q1-Q4每个区间值数量  非插补瞬时修正
+          instantFlowRateList.split(",").foreach(instant=>{
+            val tp = instant.asInstanceOf[Double]
+            tp match {
+              case tp if(tp<q1) => q1cnt+=1
+              case tp if(tp<q2) => q2cnt+=1
+              case tp if(tp<q3) => q3cnt+=1
+              case tp if(tp<q4) => q4cnt+=1
+            }
+          })
+
+          // 计算Q1-Q4每个区间值数量  插补瞬时修正
+          instantFlowRateInterpolatList.split(",").foreach(instant=>{
+            val tp = instant.asInstanceOf[Double]
+            tp match {
+              case tp if (tp<q1) => q1cnt-=1
+              case tp if (tp<q2) => q2cnt-=1
+              case tp if (tp<q3) => q3cnt-=1
+              case tp if (tp<q4) => q4cnt-=1
+            }
+          })
+
+          val Q1TQ4 = calculateQ1ToQ4(q1cnt,q2cnt,q3cnt,q4cnt,qcnt)
+          res.::(remoteMeasureRatio("",collectTime,row.getAs[String](6),
+            row.getAs[String](7),row.getAs[String](8),Q1TQ4._1
+            ,Q1TQ4._2,"",now(),row.getAs[String](5),q1cnt,q2cnt,q3cnt,q4cnt,qcnt))
+        })
+      conn.close();
+      res.iterator
+    })
+
+
+    //print kafka schema
+//    ds1.printSchema()
+
+//    //4.结果集的生成输出
+    out.writeStream
+      .format("console")
+      .start()
+      .awaitTermination()
+
+  }
+
+
+
+
+  def setStreamingLogLevels() {
+    val log4jInitialized = Logger.getRootLogger.getAllAppenders.hasMoreElements
+    if (!log4jInitialized) {
+      // We first log something to initialize Spark's default logging, then we override the
+      // logging level.
+      logInfo("Setting log level to [WARN] for streaming ." +
+        " To override add a custom log4j.properties to the classpath.")
+      Logger.getRootLogger.setLevel(Level.WARN)
+    }
+  }
+
+
+
+
+
+
+
+}
+
+

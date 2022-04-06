@@ -1,0 +1,60 @@
+
+import com.kin.common.utils.ParameterTool
+import org.apache.spark.internal.Logging
+
+import java.util
+import java.util.Objects
+
+/**
+ * @ClassName Main
+ * @Deacription TODO
+ * @Author zy
+ * @Date 2022/2/8 17:52
+ * @Version 1.0
+ * */
+object Main extends App  with Logging{
+  //check runtime env
+  private val parameterMap: util.Map[String, String] =
+    Option(System.getProperty("os.name") == "Linux") match {
+      case Some(true) =>
+        Option(Objects.isNull(args) || args.length.isNaN) match {
+          case Some(true) => throw new IllegalArgumentException("Arguments is not find .Please check!!")
+          case Some(false) =>
+            val size = args.length
+            println("arg size " + size + "---" + args(0))
+            if (size < 1 || size > 1) throw new Exception("Please check arguments size!!!")
+        }
+        val filePath = args(0)
+        ParameterTool.fromYarnPropertiesFile(filePath)
+      case Some(false) =>
+        val filePath = "anso-core/src/main/resources/transfer-app/transfer.conf"
+//        val filePath = args(0)
+        ParameterTool.fromLocalPropertiesFile(filePath)
+    }
+
+  /**
+   * check some  parameter tool
+   */
+  private[this] def parseParameterCheck(): Unit = {
+    val packageName: String = parameterMap.getOrDefault("anso.app.package", "xxxxx")
+    val className: String = parameterMap.getOrDefault("anso.app.invoke.method", "xxxxxx")
+    logInfo(packageName+"-------------"+className)
+    Objects.isNull(packageName) ||
+      Objects.isNull(className) match {
+      case true =>
+        throw new Exception("Arguments package and invokeClass is not null. Please check !!!!")
+      case false =>
+        val caller = Class.forName(packageName).getConstructor()
+          .newInstance()
+        caller
+          .getClass
+          .getMethod(className, classOf[util.Map[String, String]])
+          .invoke(caller, parameterMap)
+    }
+  }
+
+  Objects.isNull(parameterMap) && parameterMap.size().isNaN match {
+    case true => throw new Exception("Arguments map is  null .please check and  restart app!!!")
+    case false => parseParameterCheck()
+  }
+}

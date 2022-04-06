@@ -1,0 +1,31 @@
+package com.kin.common.server
+
+import org.apache.spark.internal.Logging
+import org.apache.spark.sql.SparkSession
+
+abstract class InitialImpl extends Logging {
+  lazy val spark: SparkSession =
+    Option(System.getProperty("os.name") == "Linux") match {
+      case Some(false) =>
+        System.setProperty("HADOOP_USER_NAME", "hdfs")
+        SparkSession
+          .builder()
+          .master("local[*]")
+          .config("spark.yarn.queue", "root.users.hdfs")
+          .config("spark.default.parallelism", 9)
+          .config("spark.sql.shuffle.partitions", 9)
+          .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+          .config("spark.kryoserializer.buffer.max", "512m")
+          .enableHiveSupport()
+          .getOrCreate()
+      case Some(true) =>
+        SparkSession
+          .builder()
+          .config("spark.sql.crossJoin.enabled", "true")
+          .config("spark.dynamicAllocation.enabled", "false")
+          .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+          .config("spark.kryoserializer.buffer.max", "512m")
+          .enableHiveSupport()
+          .getOrCreate()
+    }
+}

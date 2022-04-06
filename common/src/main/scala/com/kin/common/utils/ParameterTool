@@ -1,0 +1,94 @@
+package com.kin.common.utils
+
+import com.typesafe.config.{Config, ConfigFactory}
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{FileSystem, Path}
+
+import java.io.{File, FileInputStream, FileNotFoundException}
+import java.net.URI
+import java.util
+import java.util.Properties
+import scala.util.control.Breaks.{break, breakable}
+
+/**
+ * @Author zy
+ * @Description //TODO $end
+ * @Date 2021/8/3 20:08
+ * @Param $param
+ * @Version 1.0
+ * */
+object ParameterTool {
+  /**
+   * 文本加载
+   *
+   * @param filePath 文本路径
+   * @return
+   */
+  def fromLocalPropertiesFile(filePath: String): util.Map[String, String] = {
+    println(filePath)
+    val file = new File(filePath)
+    println(file.getAbsoluteFile)
+    if (!file.exists()) throw new FileNotFoundException("Properties file " + file.getAbsolutePath + " does not exist")
+    else {
+      try {
+        val prop: Properties = new Properties()
+        prop.load(new FileInputStream(file))
+        val tmpMap: util.HashMap[String, String]
+        = new util.HashMap[String, String](prop.size())
+        val set = prop.entrySet()
+        val iterator = set.iterator()
+        while (iterator.hasNext) {
+          val value = iterator.next()
+          tmpMap.put(value.getKey.asInstanceOf[String], value.getValue.asInstanceOf[String])
+        }
+        tmpMap
+      }
+    }
+  }
+
+  private[this] def getFileSystemByUri(uri: URI): FileSystem = {
+    val hdfsConf = new Configuration()
+    hdfsConf.set("fs.hdfs.impl", classOf[org.apache.hadoop.hdfs.DistributedFileSystem].getName)
+    FileSystem.get(uri, hdfsConf)
+  }
+
+  private[this] def rangeParameter(config: Config,
+                                   confKey: String,
+                                   tmpMap: util.HashMap[String, String]): Unit = {
+    val strings = confKey.split("-")
+    strings.foreach(item => {
+      var app: Config = null
+      breakable {
+        try {
+          app = config.getConfig(item)
+        } catch {
+          case e: Exception =>
+            println(item, e.getMessage)
+            break
+        }
+        val appItem = app.entrySet().iterator()
+        while (appItem.hasNext) {
+          val value = appItem.next()
+          tmpMap.put(value.getKey, value.getValue.unwrapped().toString)
+        }
+      }
+    })
+  }
+
+  /**
+   * 生产环境调用
+   *
+   * @param filePath
+   * @return
+   */
+  def fromYarnPropertiesFile(filePath: String): util.Map[String, String] = {
+    val path = new Path(filePath)
+    val confFile = File.createTempFile(path.getName, "tmp")
+    confFile.deleteOnExit()
+    getFileSystemByUri(path.toUri).copyToLocalFile(path, new Path(confFile.getAbsolutePath))
+    val config: Config = ConfigFactory.load(ConfigFactory.parseFile(confFile))
+    val tmpParameterMap = new util.HashMap[String, String]()
+    rangeParameter(config, "app-hudi", tmpParameterMap)
+    tmpParameterMap
+  }
+}

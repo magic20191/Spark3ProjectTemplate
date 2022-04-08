@@ -1,19 +1,20 @@
 package com.kin.customDefine.sink.mysql
+import com.kin.utils.DruidUtils
+
 import java.sql.DriverManager
 import java.util
-
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.catalog._
 import org.apache.spark.sql.connector.expressions.Transform
 import org.apache.spark.sql.connector.write._
-import org.apache.spark.sql.types.{StringType, StructType}
+import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 import scala.collection.JavaConverters._
 
 /*
   * Default source should some kind of relation provider
-  *
+  * reference by: http://blog.madhukaraphatak.com/spark-3-datasource-v2-part-6/
   */
 
 class DefaultSource extends TableProvider{
@@ -21,24 +22,30 @@ class DefaultSource extends TableProvider{
     getTable(null,Array.empty[Transform],caseInsensitiveStringMap.asCaseSensitiveMap()).schema()
 
   override def getTable(structType: StructType, transforms: Array[Transform], map: util.Map[String, String]): Table ={
-    new MysqlTable
+    new MysqlTable(structType)
   }
 }
 
-
-class MysqlTable extends SupportsWrite{
-
-  private val tableSchema = new StructType()
-    .add("id", StringType)
-    .add("name", StringType)
-    .add("gender", StringType)
-    .add("salary", StringType)
-    .add("comm", StringType)
-
+class MysqlTable(structType: StructType) extends SupportsWrite{
 
   override def name(): String = this.getClass.toString
 
-  override def schema(): StructType = tableSchema
+  /**
+   * 设置schema
+   */
+  override def schema(): StructType = {
+    //外部传递，则使用外部参数，没有传递则使用schema
+    if(structType != null){
+      structType
+    }else{
+      new StructType()
+        .add("id", StringType)
+        .add("name", StringType)
+        .add("gender", StringType)
+        .add("salary", StringType)
+        .add("comm", StringType)
+    }
+  }
 
   override def capabilities(): util.Set[TableCapability] = Set(TableCapability.BATCH_WRITE,
     TableCapability.TRUNCATE).asJava
@@ -71,7 +78,8 @@ class MysqlWriter extends DataWriter[InternalRow] {
   val password = "root"
   val table ="userwrite"
 
-  val connection = DriverManager.getConnection(url,user,password)
+//  val connection = DruidUtils.getConnection(url,user,password)
+  val connection = DruidUtils.getConnection
   val statement = "insert into userwrite (user) values (?)"
   val preparedStatement = connection.prepareStatement(statement)
 
@@ -90,8 +98,15 @@ class MysqlWriter extends DataWriter[InternalRow] {
   }
 
   override def close(): Unit = {
-    println("is close mysql conn")
-    connection.close()
+
   }
 
 }
+
+
+
+
+
+
+
+

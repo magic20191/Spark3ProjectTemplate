@@ -1,0 +1,25 @@
+package com.kin.customDefine.sources.text
+
+import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.sources.{BaseRelation, RelationProvider, SchemaRelationProvider}
+import org.apache.spark.sql.types.StructType
+
+class DefaultSource extends RelationProvider with SchemaRelationProvider{
+  //
+  override def createRelation(sqlContext: SQLContext, parameters: Map[String, String], schema: StructType): BaseRelation = {
+    //从参数重获取path
+    val path = parameters.get("path")
+    path match {
+      case Some(p) => new TextDatasourceRelation(sqlContext, p, schema)
+      case _ => throw new IllegalArgumentException("Path is required")
+    }
+  }
+  override def createRelation(sqlContext: SQLContext, parameters: Map[String, String]): BaseRelation = {
+    //从参数重获取path
+    val path = parameters.get("path")
+    path match {
+      case Some(p) => new TextDatasourceRelation(sqlContext, p)
+    }
+  }
+
+}

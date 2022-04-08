@@ -1,0 +1,30 @@
+package com.kin
+
+import org.apache.spark.sql.SparkSession
+object TestTextApp {
+  def main(args: Array[String]): Unit = {
+    val sparkSession = SparkSession.builder()
+      .appName("DataSourceAPIApp")
+      .master("local[2]")
+      .getOrCreate()
+    //需要使用固定写法DefaultSource
+    //Caused by: java.lang.ClassNotFoundException: com.post.spark.bigdata.text.DefaultSource
+    val people = sparkSession.read
+      //      .text("file:///Users/wn/ide/idea/src/main/scala/com/post/spark/bigdata/app/people")
+      .format("com.kin.customDefine.sources.text")
+      .option("path","file:///D:\\code\\peolpe.txt").load()
+    people.printSchema()
+    /*
+    root
+     |-- id: long (nullable = false)
+     |-- name: string (nullable = false)
+     |-- gender: string (nullable = false)
+     |-- salary: long (nullable = false)
+     |-- comm: long (nullable = false)
+     */
+    import sparkSession.implicits._    //'id>3
+    //GreaterThan(id,3) id>3
+    people.select('name,'id).filter("name != 'zhangsan'").filter('id>=2).show()
+    sparkSession.stop()
+  }
+}

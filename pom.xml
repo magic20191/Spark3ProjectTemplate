@@ -28,8 +28,9 @@
         <hive.version>2.3.7</hive.version>
         <twitter.util.version>21.1.0</twitter.util.version>
         <hudi.version>0.10.1</hudi.version>
-        <mysql.version>6.0.5</mysql.version>
+        <mysql.version>5.1.49</mysql.version>
         <druid.version>1.1.10</druid.version>
+        <clickhouse.version>0.3.2-patch7</clickhouse.version>
     </properties>
 
     <dependencyManagement>
@@ -163,7 +164,7 @@
             <!--hive-read-hudi-end-->
             <!--clickhouse-start-->
             <dependency>
-                <groupId>ru.yandex.clickhouse</groupId>
+                <groupId>com.clickhouse</groupId>
                 <artifactId>clickhouse-jdbc</artifactId>
                 <version>${clickhouse.version}</version>
             </dependency>
@@ -309,7 +310,11 @@
                 <artifactId>druid</artifactId>
                 <version>${druid.version}</version>
             </dependency>
-
+            <dependency>
+                <groupId>mysql</groupId>
+                <artifactId>mysql-connector-java</artifactId>
+                <version>${mysql.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
     <build>

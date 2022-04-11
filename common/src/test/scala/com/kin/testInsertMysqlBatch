@@ -98,7 +98,7 @@ object testInsertMysqlBatch {
    * @param schemaMap DataFrame表结构信息
    * @param tableInfo mysql表元数据信息
    * @param record 行数据
-   * @param index 拼接sql的第几个位置   insert into xxx(a,b,c) values(?,?,?) 分别为 1,2,3
+   * @param index 拼接sql的第几个位置   例如：insert into xxx(a,b,c) values(?,?,?) 分别为 1,2,3
    * @param colName 列名称 会被转为小写
    */
   def setColValue(preparedStatement:PreparedStatement ,schemaMap:Map[String, DataType]

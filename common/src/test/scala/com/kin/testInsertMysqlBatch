@@ -1,0 +1,129 @@
+package com.kin
+
+
+import com.kin.utils.DruidUtils
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.sql.types._
+
+import java.sql.{Connection, Date, PreparedStatement, ResultSet, Timestamp}
+
+object testInsertMysqlBatch {
+
+
+  def main(args: Array[String]): Unit = {
+    val sparkSession = SparkSession.builder()
+      .appName("DataSourceAPIApp")
+      .master("local[2]")
+      .getOrCreate()
+    //需要使用固定写法DefaultSource
+    //Caused by: java.lang.ClassNotFoundException: com.post.spark.bigdata.text.DefaultSource
+    val mydf = sparkSession.read
+      //      .text("file:///Users/wn/ide/idea/src/main/scala/com/post/spark/bigdata/app/people")
+      .format("com.kin.customDefine.sources.text")
+      .option("path", "file:///C:\\Users\\Administrator\\Downloads\\Spark3ProjectTemplate\\test\\testData\\peolpe.txt").load()
+    mydf.printSchema()
+
+    import sparkSession.implicits._
+
+    val mydf2 = mydf.select('name)
+      .filter("name != 'zhangsan'")
+      .filter('id >= 2)
+
+    val schema = mydf2.schema
+
+        mydf2.rdd.foreachPartition(partion => {
+          partitionWriteJdbc(partion,schema,"testTB"
+            ,"insert into userwrite values(?)"
+            ,(preparedStatement,schemaMap,tableInfo,record)=>{
+            setColValue(preparedStatement,schemaMap,tableInfo,record,1,"name")
+          })
+        })
+
+
+    sparkSession.stop()
+
+  }
+
+  /**
+   * 分区写入mysql方法
+   * @param partitions 本分区
+   * @param DF DataFrame为了获取schema
+   * @param outTbName 输出mysql表名
+   * @param sql 执行sql insert into dup(id,name,phone ) values(?,?,?)  可以写 merge into
+   * @param setRow 自由设置每行数据组装 可调 setColValue 方法设置
+   */
+  def partitionWriteJdbc(partitions:Iterator[Row],schema:StructType,outTbName:String,sql:String
+                         ,setRow:(PreparedStatement,Map[String, DataType],ResultSet ,Row) => Unit): Unit ={
+    val conn = DruidUtils.getConnection //从连接池中获取一个连接
+    conn.setAutoCommit(false)
+    var preparedStatement = conn.prepareStatement(sql)
+//      "insert into dup(id,name,phone ) values(?,?,?) where id<>?")
+
+    val tableInfo = conn.getMetaData.getColumns(null, null, outTbName, null)
+
+    var schemaMap: Map[String, DataType] = Map()
+    schema.fields.map(kv => {
+      schemaMap += (kv.name.toLowerCase -> kv.dataType)
+    })
+
+    try {
+      var batchIndex = 0
+      partitions.foreach(record => {  //装载数据
+
+        setRow(preparedStatement,schemaMap,tableInfo,record)
+
+        preparedStatement.addBatch()  // 加入批次
+        batchIndex +=1
+        // MySQL的批量写入尽量限制提交批次的数据量，否则会把MySQL写挂！！！
+        if(batchIndex % 2000 == 0 && batchIndex !=0){
+          preparedStatement.executeBatch()
+          preparedStatement.clearBatch()
+        }
+      })
+      preparedStatement.executeBatch()
+      conn.commit()
+    } catch {
+      case e: Exception => println(s"@Error@ partitionWriteJdbc ${e.getMessage}")
+      // do some log
+    } finally {
+      DruidUtils.close(preparedStatement,conn)
+    }
+  }
+
+  /**
+   *  列数据设置
+   *  会给每列选择最合适的数据列数据类型写入，只需传入相关参数即可
+   *
+   * @param preparedStatement
+   * @param schemaMap DataFrame表结构信息
+   * @param tableInfo mysql表元数据信息
+   * @param record 行数据
+   * @param index 拼接sql的第几个位置   insert into xxx(a,b,c) values(?,?,?) 分别为 1,2,3
+   * @param colName 列名称 会被转为小写
+   */
+  def setColValue(preparedStatement:PreparedStatement ,schemaMap:Map[String, DataType]
+                  ,tableInfo:ResultSet ,record:Row,index:Int,colName:String) = {
+
+    if (record.get(index-1) != null) { //如何值不为空,将类型转换为String
+      preparedStatement.setString(index, record.getAs[String](index-1))
+      val types = schemaMap.get(colName.toLowerCase)
+      types.get match {
+        case _: ByteType => preparedStatement.setInt(index, record.getAs[Int](index-1))
+        case _: ShortType => preparedStatement.setInt(index, record.getAs[Int](index-1))
+        case _: IntegerType => preparedStatement.setInt(index, record.getAs[Int](index-1))
+        case _: LongType => preparedStatement.setLong(index, record.getAs[Long](index-1))
+        case _: BooleanType => preparedStatement.setInt(index, if (record.asInstanceOf[Boolean]) 1 else 0)
+        case _: FloatType => preparedStatement.setFloat(index, record.getAs[Float](index-1))
+        case _: DoubleType => preparedStatement.setDouble(index, record.getAs[Double](index-1) )
+        case _: StringType => preparedStatement.setString(index, record.getAs[String](index-1) )
+        case _: TimestampType => preparedStatement.setTimestamp(index, record.getAs[Timestamp](index-1) )
+        case _: DateType => preparedStatement.setDate(index, record.getAs[Date](index-1))
+        case _ => throw new RuntimeException(s"nonsupport ${schemaMap.get(colName)} !!!")
+      }
+    } else { //如果值为空,将值设为对应类型的空值
+      tableInfo.absolute(index)
+      preparedStatement.setNull(index, tableInfo.getInt("DATA_TYPE"))
+    }
+  }
+
+  }

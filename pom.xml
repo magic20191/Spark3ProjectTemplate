@@ -345,8 +345,15 @@
                 <version>${hbase.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>com.typesafe</groupId>
+                <artifactId>config</artifactId>
+                <version>1.4.2</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
+
 
 
     <build>
